@@ -282,3 +282,44 @@ t.test('parse', t => {
 
   t.end()
 })
+
+t.test('string fields stay string', t => {
+  t.same(
+    Pax.parse(
+      '14 path=12345\n18 linkpath=54321\n13 WAT=12345\n15 ctime=12345\n',
+    ),
+    {
+      atime: undefined,
+      charset: undefined,
+      comment: undefined,
+      ctime: new Date('1970-01-01T03:25:45.000Z'),
+      gid: undefined,
+      gname: undefined,
+      linkpath: '54321',
+      mtime: undefined,
+      path: '12345',
+      size: undefined,
+      uid: undefined,
+      uname: undefined,
+      dev: undefined,
+      ino: undefined,
+      mode: undefined,
+      nlink: undefined,
+      global: false,
+    },
+  )
+  t.end()
+})
+
+t.test('all-digit name/charset/comment fields stay string', t => {
+  const p = Pax.parse(
+    '15 uname=12345\n15 gname=54321\n17 charset=67890\n17 comment=13579\n' +
+      '15 atime=12345\n',
+  )
+  t.equal(p.uname, '12345')
+  t.equal(p.gname, '54321')
+  t.equal(p.charset, '67890')
+  t.equal(p.comment, '13579')
+  t.same(p.atime, new Date('1970-01-01T03:25:45.000Z'))
+  t.end()
+})

@@ -1,6 +1,6 @@
 import { Unpack, UnpackSync } from '../dist/esm/unpack.js'
 
-import fs from 'fs'
+import fs, { readFileSync } from 'fs'
 import { Minipass } from 'minipass'
 import * as z from 'minizlib'
 import path from 'path'
@@ -23,6 +23,7 @@ import mutateFS from 'mutate-fs'
 import { normalizeWindowsPath as normPath } from '../dist/esm/normalize-windows-path.js'
 
 import { ReadEntry } from '../dist/esm/read-entry.js'
+import { Pax } from '../dist/esm/pax.js'
 
 // On Windows in particular, the "really deep folder path" file
 // often tends to cause problems, which don't indicate a failure
@@ -3502,6 +3503,176 @@ t.test('no linking through a symlink', t => {
         )
         check(t)
       })
+      t.end()
+    })
+  }
+  t.end()
+})
+
+t.test('numeric pax/entry name discernment', t => {
+  const numericName = '12345'
+  const alphaName = 'abcde'
+  for (const strict of [true, false]) {
+    t.test('strict=' + strict, t => {
+      for (const paxName of [numericName, alphaName]) {
+        t.test('paxName=' + paxName, t => {
+          for (const entryName of [numericName, alphaName]) {
+            t.test('entryName=' + entryName, t => {
+              const paxHeader = new Pax(
+                {
+                  path: paxName,
+                  size: '12345\n'.length,
+                },
+                false,
+              )
+              const paxData = paxHeader.encode()
+              const data = makeTar([
+                paxData,
+                {
+                  type: 'File',
+                  path: entryName,
+                  mode: 0o755,
+                  ctime: new Date('2000-01-01T00:00:00.000Z'),
+                  mtime: new Date('2000-01-01T00:00:00.000Z'),
+                  size: '12345\n'.length,
+                },
+                '12345\n',
+                '',
+                '',
+              ])
+
+              t.test('sync', t => {
+                const dir = t.testdir({})
+                new UnpackSync({ strict, cwd: dir }).end(data)
+                t.equal(
+                  readFileSync(dir + '/' + paxName, 'utf8'),
+                  '12345\n',
+                )
+                t.end()
+              })
+
+              t.test('async', async t => {
+                const dir = t.testdir({})
+                await new Promise(r => {
+                  new Unpack({ strict, cwd: dir }).on('end', r).end(data)
+                })
+                t.equal(
+                  readFileSync(dir + '/' + paxName, 'utf8'),
+                  '12345\n',
+                )
+                t.end()
+              })
+              t.end()
+            })
+          }
+          t.end()
+        })
+      }
+
+      t.end()
+    })
+    t.end()
+  }
+})
+
+t.test('numeric pax path/linkpath on non-file entries', t => {
+  // all-digit pax path/linkpath values must stay strings, otherwise the
+  // unpacker crashes with an uncaught TypeError on Directory, SymbolicLink
+  // and Link entries, or on any entry under a global header carrying an
+  // all-digit linkpath.
+  const content = '12345\n'
+  const cases = {
+    Directory: {
+      chunks: [
+        new Pax({ path: '12345' }, false).encode(),
+        { type: 'Directory', path: 'abcde', mode: 0o755 },
+        '',
+        '',
+      ],
+      check: (t, dir) =>
+        t.ok(fs.statSync(path.resolve(dir, '12345')).isDirectory()),
+    },
+    SymbolicLink: {
+      chunks: [
+        new Pax({ path: '12345', linkpath: '54321' }, false).encode(),
+        {
+          type: 'SymbolicLink',
+          path: 'abcde',
+          linkpath: 'fghij',
+          mode: 0o755,
+        },
+        '',
+        '',
+      ],
+      check: (t, dir) =>
+        t.equal(fs.readlinkSync(path.resolve(dir, '12345')), '54321'),
+    },
+    Link: {
+      chunks: [
+        {
+          type: 'File',
+          path: '54321',
+          mode: 0o644,
+          size: content.length,
+        },
+        content,
+        new Pax({ path: '12345', linkpath: '54321' }, false).encode(),
+        { type: 'Link', path: 'abcde', linkpath: 'fghij', mode: 0o644 },
+        '',
+        '',
+      ],
+      check: (t, dir) =>
+        t.equal(
+          fs.readFileSync(path.resolve(dir, '12345'), 'utf8'),
+          content,
+        ),
+    },
+    'global linkpath': {
+      chunks: [
+        new Pax({ linkpath: '54321' }, true).encode(),
+        {
+          type: 'File',
+          path: 'abcde',
+          mode: 0o644,
+          size: content.length,
+        },
+        content,
+        '',
+        '',
+      ],
+      check: (t, dir) =>
+        t.equal(
+          fs.readFileSync(path.resolve(dir, 'abcde'), 'utf8'),
+          content,
+        ),
+    },
+  }
+
+  for (const [name, { chunks, check }] of Object.entries(cases)) {
+    t.test(name, t => {
+      const data = makeTar(chunks)
+      for (const strict of [true, false]) {
+        t.test('strict=' + strict, t => {
+          t.test('sync', t => {
+            const dir = t.testdir({})
+            new UnpackSync({ strict, cwd: dir }).end(data)
+            check(t, dir)
+            t.end()
+          })
+
+          t.test('async', async t => {
+            const dir = t.testdir({})
+            await new Promise((res, rej) => {
+              new Unpack({ strict, cwd: dir })
+                .on('end', res)
+                .on('error', rej)
+                .end(data)
+            })
+            check(t, dir)
+          })
+          t.end()
+        })
+      }
       t.end()
     })
   }
