@@ -687,3 +687,48 @@ t.test('numeric pax/entry name discernment', t => {
     t.end()
   }
 })
+
+// CVE-2026-73566
+t.test('excessively deep path with a file list', t => {
+  // a pax path with far more segments than the call stack can recurse
+  const data = makeTar([
+    new Pax({ path: 'a/'.repeat(100000) + 'deep.txt' }, false).encode(),
+    {
+      type: 'File',
+      path: 'deep.txt',
+      size: 1,
+    },
+    'x',
+    {
+      type: 'File',
+      path: 'a/shallow.txt',
+      size: 1,
+    },
+    'y',
+    '',
+    '',
+  ])
+
+  const check = (t: Test, dir: string) => {
+    t.equal(readFileSync(dir + '/a/shallow.txt', 'utf8'), 'y')
+    t.strictSame(fs.readdirSync(dir + '/a'), ['shallow.txt'])
+    t.equal(fs.existsSync(dir + '/deep.txt'), false)
+  }
+
+  t.test('sync', t => {
+    const dir = t.testdir({ tarFile: data })
+    t.doesNotThrow(() =>
+      x({ sync: true, cwd: dir, file: dir + '/tarFile' }, ['a']),
+    )
+    check(t, dir)
+    t.end()
+  })
+
+  t.test('async', async t => {
+    const dir = t.testdir({ tarFile: data })
+    await x({ cwd: dir, file: dir + '/tarFile' }, ['a'])
+    check(t, dir)
+  })
+
+  t.end()
+})

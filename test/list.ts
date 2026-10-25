@@ -6,6 +6,7 @@ import t, { Test } from 'tap'
 import { fileURLToPath } from 'url'
 import { list } from '../dist/esm/list.js'
 import { Parser } from '../dist/esm/parse.js'
+import { Pax } from '../dist/esm/pax.js'
 import { ReadEntry } from '../dist/esm/read-entry.js'
 import { makeTar } from './fixtures/make-tar.js'
 
@@ -367,4 +368,75 @@ t.test('reduce file size while synchronously reading', async t => {
     })
     t.strictSame(entries, ['a'])
   })
+})
+
+// CVE-2026-73566
+t.test('excessively deep path with a file list', t => {
+  // a pax path with far more segments than the call stack can recurse
+  const deepPath = 'a/'.repeat(100000) + 'deep.txt'
+  const data = makeTar([
+    new Pax({ path: deepPath }, false).encode(),
+    {
+      type: 'File',
+      path: 'deep.txt',
+      size: 1,
+    },
+    'x',
+    {
+      type: 'File',
+      path: 'a/shallow.txt',
+      size: 1,
+    },
+    'y',
+    '',
+    '',
+  ])
+  const fileList = ['a']
+  const expect = ['a/shallow.txt']
+
+  t.test('sync', t => {
+    const dir = t.testdir({ 'file.tar': data })
+    const actual: string[] = []
+    t.doesNotThrow(() =>
+      list(
+        {
+          file: resolve(dir, 'file.tar'),
+          sync: true,
+          onReadEntry: entry => actual.push(entry.path),
+        },
+        fileList,
+      ),
+    )
+    t.strictSame(actual, expect)
+    t.end()
+  })
+
+  t.test('async', async t => {
+    const dir = t.testdir({ 'file.tar': data })
+    const actual: string[] = []
+    await list(
+      {
+        file: resolve(dir, 'file.tar'),
+        onReadEntry: entry => actual.push(entry.path),
+      },
+      fileList,
+    )
+    t.strictSame(actual, expect)
+  })
+
+  t.test('stream', t => {
+    const actual: string[] = []
+    const ignored: string[] = []
+    const l = list(fileList)
+      .on('entry', (entry: ReadEntry) => actual.push(entry.path))
+      .on('ignoredEntry', (entry: ReadEntry) => ignored.push(entry.path))
+      .on('end', () => {
+        t.strictSame(actual, expect)
+        t.strictSame(ignored, [deepPath])
+        t.end()
+      })
+    l.end(data)
+  })
+
+  t.end()
 })
