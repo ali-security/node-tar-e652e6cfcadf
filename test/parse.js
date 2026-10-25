@@ -1267,3 +1267,64 @@ t.test('max decompression ratio', async t => {
 
   t.end()
 })
+
+// A PAX extended header describes the next file entry, not any GNU long
+// name block that sits between it and that file. If the pending pax fields
+// are applied to the `L` header, node-tar desyncs from other tar
+// implementations (GNU tar, bsdtar, python tarfile), which all see a file
+// named `longname.txt` here.
+t.test('pending pax fields do not apply to intermediary meta headers', t => {
+  const longName = 'longname.txt'
+  const makeArchive = paxSize =>
+    makeTar([
+      new Pax({ size: paxSize }).encode(),
+      {
+        path: '././@LongLink',
+        type: 'NextFileHasLongPath',
+        size: longName.length + 1,
+      },
+      longName + '\0',
+      { path: 'short.txt', type: 'File', size: paxSize },
+      Buffer.alloc(paxSize, 'x'),
+      { path: 'after.txt', type: 'File', size: 1 },
+      '1',
+      Buffer.alloc(1024),
+    ])
+
+  const cases = [
+    // pax size inflates the L header, swallowing the real file header
+    ['pax size larger than long name', 2048, undefined],
+    // pax size of 0 hides the L body, which is then read as a header
+    ['pax size of zero', 0, undefined],
+    // pax size pushes the L header over maxMetaEntrySize, so it is ignored
+    ['pax size over maxMetaEntrySize', 2048, 1000],
+  ]
+
+  for (const [name, paxSize, maxMetaEntrySize] of cases) {
+    t.test(name, t => {
+      const actual = []
+      const warnings = []
+      const ignored = []
+      const p = new Parser({ maxMetaEntrySize })
+      p.on('entry', e => {
+        const entry = { path: e.path, size: e.size, bytes: 0 }
+        actual.push(entry)
+        e.on('data', c => (entry.bytes += c.length))
+      })
+      p.on('ignoredEntry', e => ignored.push(e.path))
+      p.on('warn', (code, message) => warnings.push([code, message]))
+      p.on('end', () => {
+        t.strictSame(actual, [
+          { path: longName, size: paxSize, bytes: paxSize },
+          { path: 'after.txt', size: 1, bytes: 1 },
+        ])
+        t.strictSame(warnings, [])
+        t.strictSame(ignored, [])
+        t.end()
+      })
+      p.end(makeArchive(paxSize))
+    })
+  }
+
+  t.end()
+})

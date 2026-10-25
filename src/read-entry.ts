@@ -2,7 +2,8 @@ import { Minipass } from 'minipass'
 import { Header } from './header.js'
 import { normalizeWindowsPath } from './normalize-windows-path.js'
 import { Pax } from './pax.js'
-import { EntryTypeName } from './types.js'
+import type { EntryTypeCode, EntryTypeName } from './types.js'
+import { normalFsTypes } from './types.js'
 
 export class ReadEntry extends Minipass<Buffer, Buffer> {
   extended?: Pax
@@ -104,11 +105,17 @@ export class ReadEntry extends Minipass<Buffer, Buffer> {
     this.uname = header.uname
     this.gname = header.gname
 
-    if (ex) {
-      this.#slurp(ex)
-    }
-    if (gex) {
-      this.#slurp(gex, true)
+    // pending extended headers describe the next normal file system
+    // entry, never an intermediary meta entry. Applying them here (eg, a
+    // pending pax `size` on a `L` header) would make the parser misjudge
+    // the size of the meta entry body.
+    if (normalFsTypes.has(header.typeKey as EntryTypeCode)) {
+      if (ex) {
+        this.#slurp(ex)
+      }
+      if (gex) {
+        this.#slurp(gex, true)
+      }
     }
   }
 

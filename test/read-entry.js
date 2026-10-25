@@ -306,3 +306,39 @@ t.test('entry without mode', t => {
 
   t.end()
 })
+
+t.test('pending extended headers do not apply to meta entries', t => {
+  for (const type of [
+    'NextFileHasLongPath',
+    'NextFileHasLongLinkpath',
+    'OldGnuLongPath',
+    'ExtendedHeader',
+    'GlobalExtendedHeader',
+    'OldExtendedHeader',
+  ]) {
+    const h = new Header({
+      path: '././@LongLink',
+      type,
+      size: 13,
+    })
+    h.encode()
+
+    const entry = new ReadEntry(
+      new Header(h.block, 0, { size: 0, path: 'foo.txt' }, { uid: 1234 }),
+      { size: 0, path: 'foo.txt', ino: 9876 },
+      { size: 2048, uid: 1234 },
+    )
+
+    t.match(entry, {
+      meta: true,
+      type,
+      path: '././@LongLink',
+      size: 13,
+      remain: 13,
+      blockRemain: 512,
+    })
+    t.equal(entry.uid, undefined, `${type} ignores global extended header`)
+    t.equal(entry.ino, undefined, `${type} ignores extended header`)
+  }
+  t.end()
+})
