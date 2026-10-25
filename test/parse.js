@@ -1085,3 +1085,185 @@ t.test('tarmageddon', t => {
 
   t.end()
 })
+
+t.test('max decompression ratio', async t => {
+  const makeCompressedBomb = () => {
+    const payload = Buffer.alloc(8 * 1024 * 1024)
+    return zlib.gzipSync(
+      makeTar([
+        {
+          path: 'bomb',
+          size: payload.length,
+          type: 'File',
+        },
+        payload,
+        '',
+        '',
+      ]),
+    )
+  }
+  const bomb = makeCompressedBomb()
+
+  t.test('parsing aborts by default', async t => {
+    const p = new Parser({})
+    t.throws(
+      () => p.end(bomb),
+      {
+        tarCode: 'TAR_ABORT',
+        recoverable: false,
+        message: /max decompression ratio exceeded/,
+      },
+      'parsing aborts',
+    )
+    // no-op to abort again
+    p.abort(new Error('hello'))
+  })
+
+  t.test('aborting only happens one time', t => {
+    const p = new Parser({})
+    t.throws(() => p.abort(new Error('hello')), {
+      message: 'hello',
+      tarCode: 'TAR_ABORT',
+      recoverable: false,
+    })
+    // this is ignored
+    p.end(bomb)
+    t.end()
+  })
+
+  t.test('parsing can disable the limit explicitly', async () => {
+    let bytesRead = 0
+    await new Promise(res =>
+      new Parser({
+        maxDecompressionRatio: Infinity,
+        onReadEntry(e) {
+          e.on('data', c => (bytesRead += c.byteLength))
+        },
+      })
+        .on('end', res)
+        .end(bomb)
+        .resume(),
+    )
+    t.equal(bytesRead, 8 * 1024 * 1024)
+  })
+
+  const bombTar = makeTar([
+    {
+      path: 'bomb',
+      size: 8 * 1024 * 1024,
+      type: 'File',
+    },
+    Buffer.alloc(8 * 1024 * 1024),
+    '',
+    '',
+  ])
+  const abortMatch = {
+    tarCode: 'TAR_ABORT',
+    recoverable: false,
+    message: /max decompression ratio exceeded/,
+  }
+
+  t.test('gzip bomb written in small chunks aborts', t => {
+    let bytesRead = 0
+    let aborted = false
+    const errors = []
+    const p = new Parser({
+      onReadEntry(e) {
+        e.on('data', c => (bytesRead += c.byteLength))
+      },
+    })
+    p.on('abort', () => (aborted = true))
+    p.on('error', er => errors.push(er))
+    for (let i = 0; i < bomb.length; i += 512) {
+      p.write(bomb.subarray(i, i + 512))
+    }
+    p.end()
+    t.equal(aborted, true, 'aborted')
+    t.equal(errors.length, 1, 'one error emitted')
+    t.match(errors[0], abortMatch)
+    t.ok(bytesRead < 8 * 1024 * 1024, 'did not inflate entire bomb')
+    t.end()
+  })
+
+  t.test('brotli bomb aborts by default (explicit option)', t => {
+    const p = new Parser({ brotli: {} })
+    t.throws(() => p.end(zlib.brotliCompressSync(bombTar)), abortMatch)
+    t.end()
+  })
+
+  t.test('brotli bomb aborts by default (.tbr filename)', t => {
+    const p = new Parser({ file: 'bomb.tbr' })
+    t.throws(() => p.end(zlib.brotliCompressSync(bombTar)), abortMatch)
+    t.end()
+  })
+
+  t.test('zstd bomb aborts by default (magic bytes)', t => {
+    const p = new Parser({})
+    t.throws(() => p.end(zlib.zstdCompressSync(bombTar)), abortMatch)
+    t.end()
+  })
+
+  t.test('custom lower ratio is enforced', t => {
+    const small = zlib.gzipSync(
+      makeTar([
+        {
+          path: 'small',
+          size: 64 * 1024,
+          type: 'File',
+        },
+        Buffer.alloc(64 * 1024),
+        '',
+        '',
+      ]),
+    )
+    const p = new Parser({ maxDecompressionRatio: 10 })
+    t.throws(() => p.end(small), abortMatch)
+    let bytesRead = 0
+    new Parser({
+      onReadEntry(e) {
+        e.on('data', c => (bytesRead += c.byteLength))
+      },
+    }).end(small)
+    t.equal(bytesRead, 64 * 1024, 'default ratio allows small archive')
+    t.end()
+  })
+
+  t.test('decompressor is disposed and late errors ignored', t => {
+    const errors = []
+    const p = new Parser({})
+    p.on('error', er => errors.push(er))
+    p.write(
+      zlib.gzipSync(
+        makeTar([
+          {
+            path: 'x',
+            size: 1,
+            type: 'File',
+          },
+          'x',
+        ]),
+      ),
+    )
+    const unzipSym = Object.getOwnPropertySymbols(p).find(
+      s => s.description === 'unzip',
+    )
+    const unzip = p[unzipSym]
+    t.ok(unzip, 'has a decompressor')
+    const emit = unzip.emit
+    p.abort(new Error('first'))
+    t.equal(unzip.destroyed, true, 'decompressor destroyed')
+    // an error from the decompressor arriving after abort is ignored
+    emit.call(unzip, 'error', new Error('late'))
+    p.write(Buffer.alloc(1024))
+    p.end()
+    t.equal(errors.length, 1, 'only aborted once')
+    t.match(errors[0], {
+      message: 'first',
+      tarCode: 'TAR_ABORT',
+      recoverable: false,
+    })
+    t.end()
+  })
+
+  t.end()
+})
