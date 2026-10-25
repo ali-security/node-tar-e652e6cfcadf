@@ -323,3 +323,47 @@ t.test('all-digit name/charset/comment fields stay string', t => {
   t.same(p.atime, new Date('1970-01-01T03:25:45.000Z'))
   t.end()
 })
+
+t.test('no negative size', t => {
+  t.same(Pax.parse('14 size=-1000\n'), {
+    atime: undefined,
+    charset: undefined,
+    comment: undefined,
+    ctime: undefined,
+    gid: undefined,
+    gname: undefined,
+    linkpath: undefined,
+    mtime: undefined,
+    path: undefined,
+    size: undefined,
+    uid: undefined,
+    uname: undefined,
+    dev: undefined,
+    ino: undefined,
+    mode: undefined,
+    nlink: undefined,
+    global: false,
+  })
+  t.same(Pax.parse('13 size=1000\n'), {
+    atime: undefined,
+    charset: undefined,
+    comment: undefined,
+    ctime: undefined,
+    gid: undefined,
+    gname: undefined,
+    linkpath: undefined,
+    mtime: undefined,
+    path: undefined,
+    size: 1000,
+    uid: undefined,
+    uname: undefined,
+    dev: undefined,
+    ino: undefined,
+    mode: undefined,
+    nlink: undefined,
+    global: false,
+  })
+  t.equal(Pax.parse('14 size=-1000\n').size, undefined)
+  t.equal(Pax.parse('13 size=1000\n').size, 1000)
+  t.end()
+})

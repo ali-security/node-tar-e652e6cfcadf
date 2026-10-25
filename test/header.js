@@ -683,3 +683,54 @@ t.test(
     t.equal(hPax.size, 123, 'if size is set in pax, takes priority')
   },
 )
+
+t.test('no negative size', t => {
+  const i = new Header({ size: -1000 })
+  // stubbornly refuse
+  t.equal(i.size, undefined)
+  t.end()
+})
+
+t.test('no negative size when decoding a header block', t => {
+  // build a valid header block, write the given bytes into its size
+  // field, and fix up the checksum so that it still parses as valid.
+  const withSize = setSize => {
+    const h = new Header({
+      path: 'file.txt',
+      mode: 0o644,
+      size: 0,
+      type: 'File',
+    })
+    h.encode()
+    const block = h.block
+    setSize(block.subarray(124, 136))
+    block.fill(0x20, 148, 156)
+    let sum = 0
+    for (const b of block) sum += b
+    block.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8, 'ascii')
+    return block
+  }
+
+  // base-256 encoded -512
+  const b256 = new Header(
+    withSize(f => {
+      f.fill(0xff)
+      f[10] = 0xfe
+      f[11] = 0
+    }),
+  )
+  t.equal(b256.cksumValid, true)
+  t.equal(b256.size, undefined)
+
+  // octal encoded -512
+  const oct = new Header(withSize(f => f.write('-0000001000\0', 'ascii')))
+  t.equal(oct.cksumValid, true)
+  t.equal(oct.size, undefined)
+
+  // negative sizes in extended headers are refused as well
+  const good = withSize(f => f.write('00000001750\0', 'ascii'))
+  t.equal(new Header(good).size, 1000)
+  t.equal(new Header(good, 0, { size: -512 }).size, undefined)
+  t.equal(new Header(good, 0, undefined, { size: -512 }).size, undefined)
+  t.end()
+})

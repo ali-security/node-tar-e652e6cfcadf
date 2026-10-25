@@ -8,6 +8,9 @@ import * as large from './large-numbers.js'
 import type { EntryTypeCode, EntryTypeName } from './types.js'
 import * as types from './types.js'
 
+const notNegative = (n?: number): number | undefined =>
+  n === undefined || n < 0 ? undefined : n
+
 export type HeaderData = {
   path?: string
   mode?: number
@@ -90,7 +93,9 @@ export class Header implements HeaderData {
     this.mode = ex?.mode ?? gex?.mode ?? decNumber(buf, off + 100, 8)
     this.uid = ex?.uid ?? gex?.uid ?? decNumber(buf, off + 108, 8)
     this.gid = ex?.gid ?? gex?.gid ?? decNumber(buf, off + 116, 8)
-    this.size = ex?.size ?? gex?.size ?? decNumber(buf, off + 124, 12)
+    this.size = notNegative(
+      ex?.size ?? gex?.size ?? decNumber(buf, off + 124, 12),
+    )
     this.mtime =
       ex?.mtime ?? gex?.mtime ?? decDate(buf, off + 136, 12)
     this.cksum = decNumber(buf, off + 148, 12)
@@ -178,6 +183,7 @@ export class Header implements HeaderData {
           return !(
             v === null ||
             v === undefined ||
+            (k === 'size' && Number(v) < 0) ||
             (k === 'path' && gex) ||
             (k === 'linkpath' && gex) ||
             k === 'global'

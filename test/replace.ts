@@ -5,6 +5,7 @@ import fs from 'fs'
 //@ts-ignore
 import mutateFS from 'mutate-fs'
 import { list } from '../dist/esm/list.js'
+import { Header } from '../dist/esm/header.js'
 import { fileURLToPath } from 'url'
 import zlib from 'zlib'
 import { spawn } from 'child_process'
@@ -535,6 +536,81 @@ t.test('create tarball out of another tarball', t => {
       },
       ['@utf8.tar'],
     ).then(() => check(out, t))
+  })
+
+  t.end()
+})
+
+t.test('negative entry size does not cause an infinite loop', t => {
+  // A valid header whose size is base-256 encoded -512. The body skip
+  // of -512 cancels out the 512 byte header advance, so a scan that
+  // trusts the size never makes any progress through the archive.
+  const h = new Header({
+    path: 'evil.txt',
+    mode: 0o644,
+    size: 0,
+    type: 'File',
+  })
+  h.encode()
+  const block = h.block as Buffer
+  block.fill(0xff, 124, 134)
+  block[134] = 0xfe
+  block[135] = 0
+  block.fill(0x20, 148, 156)
+  let sum = 0
+  for (const b of block) sum += b
+  block.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8, 'ascii')
+  const td = { 'evil.tar': Buffer.concat([block, Buffer.alloc(1024)]) }
+
+  // fail instead of hanging forever if the archive scan never advances
+  const guardReads = (t: Test) => {
+    const f = fs as unknown as Record<
+      'read' | 'readSync',
+      (...args: any[]) => any
+    >
+    const { read, readSync } = f
+    let reads = 0
+    const looping = () =>
+      ++reads > 1000 ? new Error('infinite loop reading archive') : null
+    f.readSync = (...args: any[]) => {
+      const er = looping()
+      if (er) throw er
+      return readSync(...args)
+    }
+    f.read = (...args: any[]) => {
+      const er = looping()
+      if (er) return process.nextTick(args[args.length - 1], er)
+      return read(...args)
+    }
+    t.teardown(() => {
+      f.read = read
+      f.readSync = readSync
+    })
+  }
+
+  const check = (file: string, t: Test) => {
+    const entries: string[] = []
+    list({
+      file,
+      sync: true,
+      onReadEntry: entry => entries.push(entry.path),
+    })
+    t.same(entries, ['evil.txt', path.basename(__filename)])
+  }
+
+  t.test('sync', t => {
+    guardReads(t)
+    const file = resolve(t.testdir(td), 'evil.tar')
+    r({ sync: true, file, cwd: __dirname }, [path.basename(__filename)])
+    check(file, t)
+    t.end()
+  })
+
+  t.test('async', async t => {
+    guardReads(t)
+    const file = resolve(t.testdir(td), 'evil.tar')
+    await r({ file, cwd: __dirname }, [path.basename(__filename)])
+    check(file, t)
   })
 
   t.end()
